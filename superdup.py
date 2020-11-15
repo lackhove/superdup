@@ -293,7 +293,7 @@ def main():
     parser.add_argument(
         "--config",
         type=lambda x: Path(x).expanduser().resolve(),
-        default=Path("config.ini").resolve(),
+        default=Path("/superdup/config.ini").resolve(),
     )
     parser.add_argument("--force-verification", action="store_true")
     parser.add_argument("--dry-run", action="store_true")

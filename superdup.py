@@ -1,116 +1,86 @@
 #!/usr/bin/python3
-# -*- coding: utf-8 -*-
 
-#  Copyright 2018 Kilian Lackhove
-#
-#  nektar-tools is free software: you can redistribute it and/or modify
-#  it under the terms of the GNU General Public License as published by
-#  the Free Software Foundation, either version 3 of the License, or
-#  (at your option) any later version.
-#
-#  nektar-tools is distributed in the hope that it will be useful,
-#  but WITHOUT ANY WARRANTY; without even the implied warranty of
-#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-#  GNU General Public License for more details.
-#
-#  You should have received a copy of the GNU General Public License
-#  along with nektar-tools.  If not, see <http://www.gnu.org/licenses/>.
+#  Copyright 2020 Kilian Lackhove
 
-
-import os
-import sys
-import re
 import argparse
-import subprocess
 import json
-import datetime
-import dateutil.parser
+import logging
+import re
+import subprocess
+import sys
+from datetime import datetime, timedelta
+from pathlib import Path
+from typing import List, Mapping
 
-DUPLICACY_COMMAND = "/usr/local/bin/duplicacy"
-if not os.path.isfile(DUPLICACY_COMMAND):
-    DUPLICACY_COMMAND = "/usr/bin/duplicacy"
-STAMP_PATH = "/root/.duplicacy_stamps"
+DUPLICACY_COMMAND = "/usr/bin/duplicacy"
+STAMP_PATH = Path("~/.duplicacy_stamps_new").expanduser().resolve()
+SOURCE_DIRS_PATH = Path("/source_dirs/")
+DRY_RUN = True
 
-CONFIG = {
+DUPLICACY_ENV = {
     "DUPLICACY_PASSWORD": "topsecret",
     "DUPLICACY_B2_ID": "secret",
     "DUPLICACY_B2_KEY": "supersecret",
 }
 
-args = None
+
+logger = logging.getLogger("superdup")
+logger.addHandler(logging.StreamHandler(sys.stdout))
 
 
-def main():
-    parser = argparse.ArgumentParser(description="perform duplicacy backups, prune and checks")
-    parser.add_argument("--debug", action="store_true")
-    parser.add_argument("--verify-force", action="store_true")
-    parser.add_argument("source_dir", type=str, nargs="+", help="source dir")
-
-    global args
-    args = parser.parse_args()
-
-    if not testOnline():
-        print("--- ERROR: not online exiting", flush=True)
-        sys.exit(-1)
-
-    retval = True
-
-    for sd in args.source_dir:
-        print("--- procesing {}".format(sd), flush=True)
-
-        if not os.path.isdir(sd):
-            print(
-                "--- ERROR:  source dir {} does not exist, skipping".format(sd),
-                flush=True,
-            )
-            retval = False
-            continue
-
-        retval = backup(sd) and retval
-        retval = prune(sd) and retval
-        retval = verify(sd) and retval
-
-    if not retval:
-        sys.exit(-1)
+class NetworkError(Exception):
+    pass
 
 
-def testOnline():
+def test_online():
     return True
 
 
-def wrapDuplicacy(command, cwd):
-    if args.debug:
+def call_duplicacy(command: List[str], cwd: Path, dry_run=DRY_RUN):
+    command.insert(0, DUPLICACY_COMMAND)
+    if logger.isEnabledFor(logging.DEBUG):
         command.insert(1, "-debug")
-        print("runnig command {}".format(command))
-    p = subprocess.Popen(
-        command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=CONFIG, cwd=cwd
-    )
-    while p.poll() is None:
-        print(p.stdout.readline().decode("utf-8").rstrip(), flush=True)
-    out, err = p.communicate()
-    if p.returncode:
-        raise subprocess.CalledProcessError(p.returncode, err)
+    logger.debug(f"runnig command {' '.join(command)}")
+    if not dry_run:
+        p = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            env=DUPLICACY_ENV,
+            cwd=cwd,
+            text=True,
+        )
+        out = ""
+        while p.poll() is None:
+            tmp = p.stdout.readline().rstrip()
+            logger.debug("duplicacy STDOUT: " + tmp)
+            out += tmp + "\n"
+        tmp, err = p.communicate()
+        out += tmp + "\n"
+        if p.returncode != 0:
+            raise subprocess.CalledProcessError(
+                p.returncode, " ".join(command), out, err
+            )
+        return out, err
+    else:
+        return "", ""
 
 
-def backup(source_dir):
-
-    print("--- starting backup for {}".format(source_dir), flush=True)
+def backup(source_dir: Path) -> bool:
+    logger.info(f"starting backup for {source_dir}")
     try:
-        wrapDuplicacy([DUPLICACY_COMMAND, "backup", "-stats"], cwd=source_dir)
+        call_duplicacy(["backup", "-stats"], cwd=source_dir)
     except subprocess.CalledProcessError:
-        print("--- ERROR: backup failed for {}".format(source_dir), flush=True)
+        logger.error("backup failed for {}".format(source_dir), flush=True)
         return False
-    print("--- SUCCESS", flush=True)
     return True
 
 
 def prune(source_dir):
-
-    print("--- starting prune for {}".format(source_dir), flush=True)
+    logger.info(f"starting prune for {source_dir}")
     try:
-        wrapDuplicacy(
+        call_duplicacy(
             [
-                DUPLICACY_COMMAND,
                 "prune",
                 "-keep",
                 "0:360",
@@ -124,92 +94,131 @@ def prune(source_dir):
             cwd=source_dir,
         )
     except subprocess.CalledProcessError:
-        print("--- ERROR: prune failed for {}".format(source_dir), flush=True)
+        logger.error(f"prune failed for {source_dir}")
         return False
-    print("--- SUCCESS", flush=True)
     return True
 
 
-def verify(source_dir):
-
-    rightNow = datetime.datetime.now()
-
-    if not os.path.exists(STAMP_PATH):
-        stamps = {}
-    else:
+def load_stamps():
+    try:
         with open(STAMP_PATH, "r") as f:
             stamps = json.load(f)
+    except IOError:
+        stamps = {}
+    return stamps
 
-    verify = False
-    if source_dir in stamps:
-        lastVerify = dateutil.parser.parse(stamps[source_dir])
-        timediff = rightNow - lastVerify
-        print("--- last verification was {} ago".format(timediff), flush=True)
-        if timediff > datetime.timedelta(days=90):
-            verify = True
+
+def save_stamp(source_dir):
+    stamps = load_stamps()
+    stamps[source_dir.as_posix()] = datetime.now().isoformat()
+    STAMP_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(STAMP_PATH, "w") as f:
+        json.dump(stamps, f)
+
+
+def verify(source_dir):
+    logger.info(f"starting verification for {source_dir}")
+
+    # p = subprocess.Popen(
+    #     [DUPLICACY_COMMAND, "list"],
+    #     stdout=subprocess.PIPE,
+    #     stderr=subprocess.PIPE,
+    #     env=DUPLICACY_ENV,
+    #     cwd=source_dir,
+    # )
+    # out, err = p.communicate()
+    # if p.returncode != 0:
+    #     logger.error(f"list failed for {source_dir}")
+    #     return False
+
+    out, _ = call_duplicacy(["list",], cwd=source_dir, dry_run=False)
+    print(out)
+    matches = re.findall(r"Snapshot (\S+) revision (\d+)", out)
+    snapshot_id, latest_rev = matches[-1]
+
+    logger.info(f"verifying snapshot {snapshot_id} revision {latest_rev}")
+    try:
+        call_duplicacy(
+            ["check", "-chunks", "-r", latest_rev, "-id", snapshot_id,], cwd=source_dir,
+        )
+    except subprocess.CalledProcessError:
+        logger.error(f"verification failed for {source_dir}")
+        return False
+
+    save_stamp(source_dir)
+
+    return True
+
+
+def check(source_dir):
+    logger.info(f"starting check for {source_dir}")
+    try:
+        call_duplicacy([DUPLICACY_COMMAND, "check"], cwd=source_dir)
+    except subprocess.CalledProcessError:
+        logger.error(f"ERROR: check failed for {source_dir}")
+        return False
+    return True
+
+
+def is_verification_scheduled(source_dir: Path):
+    stamps = load_stamps()
+    if source_dir.as_posix() in stamps:
+        last_verify = datetime.fromisoformat(stamps[source_dir.as_posix()])
+        time_diff = datetime.now() - last_verify
+        logger.info(f"last verification was {time_diff} ago")
+        if time_diff > timedelta(days=90):
+            return True
     else:
-        print("--- no previous verification found", flush=True)
-        verify = True
-
-    if args.verify_force:
-        print("--- Enforcing verification")
-        verify = True
-
-    if verify:
-        print("--- starting verification for {}".format(source_dir), flush=True)
-        p = subprocess.Popen(
-            [DUPLICACY_COMMAND, "list"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            env=CONFIG,
-            cwd=source_dir,
-        )
-        out, err = p.communicate()
-        if p.returncode:
-            print("--- ERROR: list failed for {}".format(source_dir), flush=True)
-            return False
-        matches = re.findall(r"Snapshot (\S+) revision (\d+)", out.decode("utf-8"))
-        snapshot_id, latestRev = matches[-1]
-
-        # duplicacy check -chunks -r 3
-        print(
-            "--- verifying snapshot {} revision {}".format(snapshot_id, latestRev),
-            flush=True,
-        )
-        command = [
-            DUPLICACY_COMMAND,
-            "check",
-            "-chunks",
-            "-r",
-            latestRev,
-            "-id",
-            snapshot_id,
-        ]
-        try:
-            wrapDuplicacy(command, cwd=source_dir)
-        except subprocess.CalledProcessError:
-            print(
-                "--- ERROR: verification failed for {}".format(source_dir), flush=True
-            )
-            return False
-
-        stamps[source_dir] = rightNow.isoformat()
-        with open(STAMP_PATH, "w") as f:
-            json.dump(stamps, f)
-        print("--- SUCCESS", flush=True)
-
+        logger.info("no previous verification found")
         return True
 
-    else:
+    return False
 
-        print("--- starting check for {}".format(source_dir), flush=True)
-        try:
-            wrapDuplicacy([DUPLICACY_COMMAND, "check"], cwd=source_dir)
-        except subprocess.CalledProcessError:
-            print("--- ERROR: check failed for {}".format(source_dir), flush=True)
-            return False
-        print("--- SUCCESS", flush=True)
-        return True
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="perform duplicacy backups, prune and checks"
+    )
+    parser.add_argument("--verbosity", type=int, choices=range(5))
+    parser.add_argument("--force-verification", action="store_true")
+
+    args = parser.parse_args()
+
+    logger.setLevel(
+        {
+            0: logging.CRITICAL,
+            1: logging.ERROR,
+            2: logging.WARNING,
+            3: logging.INFO,
+            4: logging.DEBUG,
+        }.get(args.verbosity)
+    )
+
+    if not test_online():
+        logger.critical("not online exiting", flush=True)
+        sys.exit(-1)
+
+    summary = {}
+    for sd in (Path("/etc/").expanduser().resolve(),):  # SOURCE_DIRS_PATH.iterdir():
+        if not sd.is_dir():
+            logger.info(f"Skipping {sd}")
+            continue
+        if not Path(sd, ".duplicacy").is_dir():
+            logger.info(f"Skipping {sd}, not a duplicacy repo")
+            continue
+
+        summary[sd] = {"backup": backup(sd), "prune": prune(sd)}
+        if not args.force_verification or is_verification_scheduled(sd):
+            summary[sd]["verify"] = verify(sd)
+        else:
+            summary[sd]["check"] = check(sd)
+
+    logger.info("")
+    logger.info("Summary:")
+    for sd, results in summary.items():
+        logger.info(f"  {sd.as_posix()}:")
+        for step_name, step_result in results.items():
+            logger.info(f"    {step_name:6}: {'OK'if step_result else 'FAILED'}")
 
 
 if __name__ == "__main__":

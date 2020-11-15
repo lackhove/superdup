@@ -11,6 +11,7 @@ import sys
 from configparser import ConfigParser
 from dataclasses import dataclass
 from datetime import datetime, timedelta
+from functools import wraps
 from pathlib import Path
 from typing import List
 
@@ -18,12 +19,16 @@ logger = logging.getLogger("superdup")
 logger.addHandler(logging.StreamHandler(sys.stdout))
 
 
+
 @dataclass
 class Config:
     duplicacy_command: str = "/usr/bin/duplicacy"
     stamp_path: Path = Path("~/.duplicacy_stamps_new").expanduser().resolve()
+    log_path: Path = Path("~/.duplicacy_logs").expanduser().resolve()
     source_path_dirs: Path = Path("/source_dirs/")
     dry_run: bool = True
+    num_logfiles: int = 5
+
     duplicacy_env = {
         "DUPLICACY_PASSWORD": "topsecret",
         "DUPLICACY_B2_ID": "secret",
@@ -50,6 +55,9 @@ class Config:
         self.stamp_path = (
             Path(kwargs.get("stamp_path", self.stamp_path)).expanduser().resolve()
         )
+        self.log_path = (
+            Path(kwargs.get("log_path", self.log_path)).expanduser().resolve()
+        )
         self.source_path_dirs = (
             Path(kwargs.get("source_path_dirs", self.source_path_dirs))
             .expanduser()
@@ -58,6 +66,34 @@ class Config:
 
         envs = dict(parser["dulicacy-env"])
         self.duplicacy_env.update(envs)
+
+
+def log_to_file(func):
+    @wraps(func)
+    def wrapper_log_to_file(*args, **kwargs):
+        logfile_name = func.__name__
+        logfile_path = (
+            Config().log_path / f"{logfile_name}_{datetime.now().isoformat()}.log"
+        )
+        logfile_path.parent.mkdir(parents=True, exist_ok=True)
+
+        old_logfiles = sorted(
+            logfile_path.parent.glob(f"{logfile_name}_*.log"), reverse=True
+        )
+        for del_file in old_logfiles[Config().num_logfiles :]:
+            logger.debug(f"purging old logfile {del_file}")
+            del_file.unlink()
+
+        file_handler = logging.FileHandler(logfile_path)
+        logger.addHandler(file_handler)
+
+        value = func(*args, **kwargs)
+
+        logger.removeHandler(file_handler)
+
+        return value
+
+    return wrapper_log_to_file
 
 
 class NetworkError(Exception):
@@ -71,8 +107,7 @@ def test_online():
 
 def call_duplicacy(command: List[str], cwd: Path, dry_run=None):
     config = Config()
-    if dry_run is None:
-        dry_run = config.dry_run
+    dry_run = config.dry_run if dry_run is None else dry_run
 
     command.insert(0, config.duplicacy_command)
     if logger.isEnabledFor(logging.DEBUG):
@@ -106,16 +141,17 @@ def call_duplicacy(command: List[str], cwd: Path, dry_run=None):
         return "", ""
 
 
+@log_to_file
 def backup(source_dir: Path) -> bool:
     logger.info(f"starting backup for {source_dir}")
     try:
         call_duplicacy(["backup", "-stats"], cwd=source_dir)
     except subprocess.CalledProcessError:
-        logger.error("backup failed for {}".format(source_dir), flush=True)
+        logger.error("backup failed for {}".format(source_dir))
         return False
     return True
 
-
+@log_to_file
 def prune(source_dir):
     logger.info(f"starting prune for {source_dir}")
     try:
@@ -159,7 +195,7 @@ def save_stamp(source_dir):
     with open(config.stamp_path, "w") as f:
         json.dump(stamps, f)
 
-
+@log_to_file
 def verify(source_dir):
     logger.info(f"starting verification for {source_dir}")
 
@@ -180,7 +216,7 @@ def verify(source_dir):
 
     return True
 
-
+@log_to_file
 def check(source_dir):
     logger.info(f"starting check for {source_dir}")
     config = Config()
@@ -238,7 +274,7 @@ def main():
     config.dry_run = args.dry_run
 
     if not test_online():
-        logger.critical("not online exiting", flush=True)
+        logger.critical("not online exiting")
         sys.exit(-1)
 
     summary = {}
@@ -262,6 +298,8 @@ def main():
         logger.info(f"  {sd.as_posix()}:")
         for step_name, step_result in results.items():
             logger.info(f"    {step_name:6}: {'OK'if step_result else 'FAILED'}")
+    logger.info("")
+    logger.info("See individual logfiles for more info")
 
 
 if __name__ == "__main__":

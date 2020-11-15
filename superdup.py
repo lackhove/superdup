@@ -128,9 +128,10 @@ def call_duplicacy(command: List[str], cwd: Path, dry_run=None):
             text=True,
         )
         out = ""
+        # TODO: pass stderr, too
         while p.poll() is None:
             tmp = p.stdout.readline().rstrip()
-            logger.debug("duplicacy STDOUT: " + tmp)
+            logger.info("duplicacy STDOUT: " + tmp)
             out += tmp + "\n"
         tmp, err = p.communicate()
         out += tmp + "\n"

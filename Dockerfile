@@ -11,4 +11,4 @@ RUN chmod +x /usr/local/bin/duplicacy
 
 COPY superdup.py /usr/local/bin/superdup.py
 
-CMD [ "python", "-u", "/usr/local/bin/superdup.py", "--config", "/superdup/config.ini", "--verbosity", "4"]
+CMD [ "python", "-u", "/usr/local/bin/superdup.py", "--config", "/superdup/config.ini"]

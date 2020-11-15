@@ -29,7 +29,7 @@ logger.addHandler(logging.StreamHandler(sys.stdout))
 class Config:
     duplicacy_command: str = attr.ib(default="/usr/local/bin/duplicacy", converter=str)
     stamp_path: Path = attr.ib(
-        default=Path("/superdup/stamps"),
+        default=Path("/superdup/stamps.json"),
         converter=lambda x: Path(x).expanduser().resolve(),
     )
     log_path: Path = attr.ib(
@@ -40,7 +40,7 @@ class Config:
         default=Path("/source_dirs/"),
         converter=lambda x: Path(x).expanduser().resolve(),
     )
-    dry_run: bool = attr.ib(default=True, converter=bool)
+    dry_run: bool = attr.ib(default=False, converter=bool)
     num_logfiles: int = attr.ib(default=5, converter=int)
 
     email_to: str = attr.ib(default="bar@foo.com", converter=str)
@@ -189,22 +189,26 @@ def load_stamps():
 
 def save_stamp(source_dir):
     stamps = load_stamps()
-    stamps[source_dir.as_posix()] = datetime.now().isoformat()
+    stamps[source_dir.name] = datetime.now().isoformat()
     config.stamp_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config.stamp_path, "w") as f:
         json.dump(stamps, f)
+    logger.debug(f"saved stamp for {source_dir.name}: {stamps}")
 
 
 @log_to_file
 def verify(source_dir):
     logger.info(f"starting verification for {source_dir}")
 
-    out, _ = call_duplicacy(["list"], cwd=source_dir, dry_run=False)
-    matches = re.findall(r"Snapshot (\S+) revision (\d+)", out)
-    snapshot_id, latest_rev = matches[-1]
-
-    logger.info(f"verifying snapshot {snapshot_id} revision {latest_rev}")
     try:
+        out, _ = call_duplicacy(["list"], cwd=source_dir, dry_run=False)
+        matches = re.findall(r"Snapshot (\S+) revision (\d+)", out)
+        if len(matches) == 0:
+            logger.critical(f"No snapshots found for {source_dir}")
+            return False
+
+        snapshot_id, latest_rev = matches[-1]
+        logger.info(f"verifying snapshot {snapshot_id} revision {latest_rev}")
         call_duplicacy(
             ["check", "-chunks", "-r", latest_rev, "-id", snapshot_id], cwd=source_dir,
         )
@@ -220,7 +224,7 @@ def check(source_dir):
     logger.info(f"starting check for {source_dir}")
 
     try:
-        call_duplicacy([config.duplicacy_command, "check"], cwd=source_dir)
+        call_duplicacy(["check"], cwd=source_dir)
         return True
     except subprocess.CalledProcessError:
         logger.error(f"ERROR: check failed for {source_dir}")
@@ -257,7 +261,7 @@ def email_notify(summary):
     message = MIMEMultipart()
     message["From"] = config.email_from
     message["To"] = config.email_to
-    message["Subject"] = "duplicity: " + ("SUCCESS" if successful(summary) else "ERROR")
+    message["Subject"] = "superdup: " + ("SUCCESS" if successful(summary) else "ERROR")
     message.attach(MIMEText(summary_to_str(summary), "plain"))
 
     for logfile_path in latest_logs(summary):
@@ -293,7 +297,7 @@ def main():
     parser.add_argument(
         "--config",
         type=lambda x: Path(x).expanduser().resolve(),
-        default=Path("/superdup/config.ini").resolve(),
+        default=Path("/superdup/config.ini"),
     )
     parser.add_argument("--force-verification", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -313,8 +317,6 @@ def main():
     global config
     config = Config.from_ini_file(args.config)
     config.dry_run = config.dry_run or args.dry_run
-
-    print(config)
 
     if not test_online():
         logger.critical("not online, exiting")

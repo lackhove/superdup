@@ -17,6 +17,7 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import wraps
 from pathlib import Path
+from time import sleep
 from typing import List
 
 import attr
@@ -100,11 +101,15 @@ class NetworkError(Exception):
     pass
 
 
-def test_online():
-    try:
-        socket.gethostbyname("www.google.de")
-        return True
-    except socket.error:
+def wait_online():
+    for i in range(10):
+        try:
+            socket.gethostbyname("www.google.de")
+            return True
+        except socket.error:
+            logger.critical(f"not online, retrying in {2**i} seconds")
+            sleep(2 ** i)
+    else:
         return False
 
 
@@ -319,7 +324,7 @@ def main():
     config = Config.from_ini_file(args.config)
     config.dry_run = config.dry_run or args.dry_run
 
-    if not test_online():
+    if not wait_online():
         logger.critical("not online, exiting")
         sys.exit(-1)
 

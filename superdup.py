@@ -205,7 +205,7 @@ def verify(source_dir):
         out, _ = call_duplicacy(["list"], cwd=source_dir, dry_run=False)
         matches = re.findall(r"Snapshot (\S+) revision (\d+)", out)
         if len(matches) == 0:
-            logger.critical(f"No snapshots found for {source_dir}")
+            logger.warning(f"No snapshots found for {source_dir}")
             return False
 
         snapshot_id, latest_rev = matches[-1]

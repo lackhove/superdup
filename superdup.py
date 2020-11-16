@@ -385,11 +385,11 @@ def main():
 def summary_to_str(summary):
     retval = ""
     for sd, results in summary.items():
-        retval += f"{sd.as_posix()}:"
+        retval += f"{sd.as_posix()}:\n"
         for step_name, step_result in results.items():
-            retval += f"\n  {step_name:7}: {'SUCCESS' if step_result else 'FAILED'}"
+            retval += f"  {step_name:7}: {'SUCCESS' if step_result else 'FAILED'}\n"
     retval += "\n"
-    retval += "\nSee individual logfiles for more info"
+    retval += "See individual logfiles for more info\n"
 
     return retval
 

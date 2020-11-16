@@ -190,11 +190,11 @@ def load_stamps():
 
 def save_stamp(source_dir):
     stamps = load_stamps()
-    stamps[source_dir.name] = datetime.now().isoformat()
+    stamps[source_dir.as_posix()] = datetime.now().isoformat()
     config.stamp_path.parent.mkdir(parents=True, exist_ok=True)
     with open(config.stamp_path, "w") as f:
         json.dump(stamps, f)
-    logger.debug(f"saved stamp for {source_dir.name}: {stamps}")
+    logger.debug(f"saved stamp for {source_dir.as_posix()}: {stamps}")
 
 
 @log_to_file
@@ -294,7 +294,7 @@ def main():
     parser = argparse.ArgumentParser(
         description="perform duplicacy backups, prune and checks"
     )
-    parser.add_argument("--verbosity", type=int, choices=range(5))
+    parser.add_argument("--verbosity", type=int, choices=range(5), default=3)
     parser.add_argument(
         "--config",
         type=lambda x: Path(x).expanduser().resolve(),
@@ -333,7 +333,7 @@ def main():
             continue
 
         summary[sd] = {"backup": backup(sd), "prune": prune(sd)}
-        if not args.force_verification or is_verification_scheduled(sd):
+        if args.force_verification or is_verification_scheduled(sd):
             summary[sd]["verify"] = verify(sd)
         else:
             summary[sd]["check"] = check(sd)

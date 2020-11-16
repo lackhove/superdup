@@ -24,7 +24,10 @@ from typing import List
 import attr
 
 logger = logging.getLogger("superdup")
-logger.addHandler(logging.StreamHandler(sys.stdout))
+sh = logging.StreamHandler(sys.stdout)
+formatter = logging.Formatter(str("{asctime} {levelname} {message}"), style="{")
+sh.setFormatter(formatter)
+logger.addHandler(sh)
 
 
 @attr.s
@@ -87,6 +90,7 @@ def log_to_file(func):
             del_file.unlink()
 
         file_handler = logging.FileHandler(logfile_path)
+        file_handler.setFormatter(formatter)
         logger.addHandler(file_handler)
 
         value = func(source_dir)
@@ -296,7 +300,9 @@ def email_notify(summary):
         with open(logfile_path, "r") as fd:
             attachment = MIMEText(fd.read())
             attachment.add_header(
-                "Content-Disposition", "attachment", filename=logfile_path.parent.name + "_" + logfile_path.name
+                "Content-Disposition",
+                "attachment",
+                filename=logfile_path.parent.name + "_" + logfile_path.name,
             )
             message.attach(attachment)
 
@@ -369,16 +375,19 @@ def main():
 
     email_notify(summary)
 
-    if not successful(summary):
+    if successful(summary):
+        logger.info("SUCCESS")
+    else:
+        logger.critical("ERRORS detected")
         sys.exit(1)
 
 
 def summary_to_str(summary):
-    retval = "Summary:"
+    retval = ""
     for sd, results in summary.items():
-        retval += f"\n  {sd.as_posix()}:"
+        retval += f"{sd.as_posix()}:"
         for step_name, step_result in results.items():
-            retval += f"\n    {step_name:6}: {'OK' if step_result else 'FAILED'}"
+            retval += f"\n  {step_name:7}: {'SUCCESS' if step_result else 'FAILED'}"
     retval += "\n"
     retval += "\nSee individual logfiles for more info"
 

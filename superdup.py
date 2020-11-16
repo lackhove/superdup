@@ -269,7 +269,7 @@ def email_notify(summary):
         with open(logfile_path, "r") as fd:
             attachment = MIMEText(fd.read())
             attachment.add_header(
-                "Content-Disposition", "attachment", filename=logfile_path.name
+                "Content-Disposition", "attachment", filename=logfile_path.parent.name + "_" + logfile_path.name
             )
             message.attach(attachment)
 

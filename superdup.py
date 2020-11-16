@@ -3,6 +3,7 @@
 #  Copyright 2020 Kilian Lackhove
 
 import argparse
+import asyncio
 import json
 import logging
 import re
@@ -113,7 +114,19 @@ def wait_online():
         return False
 
 
-def call_duplicacy(command: List[str], cwd: Path, dry_run=None):
+async def read_stream(stream, log_func):
+    output = ""
+    while True:
+        line = await stream.readline()
+        if not line:
+            break
+        line = line.decode("utf-8").rstrip()
+        output += line
+        log_func(line)
+    return output
+
+
+async def call_duplicacy_async(command: List[str], cwd: Path, dry_run=None):
     dry_run = config.dry_run if dry_run is None else dry_run
 
     command.insert(0, config.duplicacy_command)
@@ -124,26 +137,31 @@ def call_duplicacy(command: List[str], cwd: Path, dry_run=None):
     else:
         logger.debug(f"runnig command '{' '.join(command)}'")
     if not dry_run:
-        p = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+        process = await asyncio.create_subprocess_exec(
+            *command,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
             env=config.duplicacy_env,
             cwd=cwd,
-            text=True,
         )
-        out = ""
-        # TODO: pass stderr, too
-        while p.poll() is None:
-            tmp = p.stdout.readline().rstrip()
-            logger.info("duplicacy STDOUT: " + tmp)
-            out += tmp + "\n"
-        tmp, err = p.communicate()
-        out += tmp + "\n"
-        if p.returncode != 0:
-            raise subprocess.CalledProcessError(
-                p.returncode, " ".join(command), out, err
+        try:
+            out, err = await asyncio.gather(
+                read_stream(
+                    process.stdout, lambda x: logger.info("duplicacy STDOUT: " + x)
+                ),
+                read_stream(
+                    process.stderr, lambda x: logger.info("duplicacy STDERR: " + x)
+                ),
             )
+        except Exception:
+            process.kill()
+            raise
+        finally:
+            exitcode = await process.wait()
+
+        if exitcode != 0:
+            raise subprocess.CalledProcessError(exitcode, " ".join(command), out, err)
+
         return out, err
     else:
         return "", ""
@@ -153,7 +171,7 @@ def call_duplicacy(command: List[str], cwd: Path, dry_run=None):
 def backup(source_dir: Path) -> bool:
     logger.info(f"starting backup for {source_dir}")
     try:
-        call_duplicacy(["backup", "-stats"], cwd=source_dir)
+        asyncio.run(call_duplicacy_async(["backup", "-stats"], source_dir))
         return True
     except subprocess.CalledProcessError:
         logger.error("backup failed for {}".format(source_dir))
@@ -164,19 +182,21 @@ def backup(source_dir: Path) -> bool:
 def prune(source_dir):
     logger.info(f"starting prune for {source_dir}")
     try:
-        call_duplicacy(
-            [
-                "prune",
-                "-keep",
-                "0:360",
-                "-keep",
-                "30:30",
-                "-keep",
-                "7:7",
-                "-keep",
-                "1:1",
-            ],
-            cwd=source_dir,
+        asyncio.run(
+            call_duplicacy_async(
+                [
+                    "prune",
+                    "-keep",
+                    "0:360",
+                    "-keep",
+                    "30:30",
+                    "-keep",
+                    "7:7",
+                    "-keep",
+                    "1:1",
+                ],
+                source_dir,
+            )
         )
         return True
     except subprocess.CalledProcessError:
@@ -207,7 +227,7 @@ def verify(source_dir):
     logger.info(f"starting verification for {source_dir}")
 
     try:
-        out, _ = call_duplicacy(["list"], cwd=source_dir, dry_run=False)
+        out, _ = asyncio.run(call_duplicacy_async(["list"], source_dir, dry_run=False))
         matches = re.findall(r"Snapshot (\S+) revision (\d+)", out)
         if len(matches) == 0:
             logger.warning(f"No snapshots found for {source_dir}")
@@ -215,8 +235,10 @@ def verify(source_dir):
 
         snapshot_id, latest_rev = matches[-1]
         logger.info(f"verifying snapshot {snapshot_id} revision {latest_rev}")
-        call_duplicacy(
-            ["check", "-chunks", "-r", latest_rev, "-id", snapshot_id], cwd=source_dir,
+        asyncio.run(
+            call_duplicacy_async(
+                ["check", "-chunks", "-r", latest_rev, "-id", snapshot_id], source_dir
+            )
         )
         save_stamp(source_dir)
         return True
@@ -230,7 +252,7 @@ def check(source_dir):
     logger.info(f"starting check for {source_dir}")
 
     try:
-        call_duplicacy(["check"], cwd=source_dir)
+        asyncio.run(call_duplicacy_async(["check"], source_dir))
         return True
     except subprocess.CalledProcessError:
         logger.error(f"ERROR: check failed for {source_dir}")

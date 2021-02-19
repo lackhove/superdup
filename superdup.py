@@ -189,6 +189,7 @@ def prune(source_dir):
             call_duplicacy_async(
                 [
                     "prune",
+                    "-all",
                     "-keep",
                     "0:360",
                     "-keep",
@@ -212,7 +213,7 @@ def check(source_dir):
     logger.info(f"starting check for {source_dir}")
 
     try:
-        asyncio.run(call_duplicacy_async(["check"], source_dir))
+        asyncio.run(call_duplicacy_async(["check", "-tabular"], source_dir))
         return True
     except subprocess.CalledProcessError:
         logger.error(f"ERROR: check failed for {source_dir}")
@@ -305,8 +306,12 @@ def main():
             logger.info(f"Skipping {sd}, not a duplicacy repo")
             continue
 
-        summary[sd] = {"backup": backup(sd), "prune": prune(sd)}
-        summary[sd]["check"] = check(sd)
+        summary[sd] = {"backup": backup(sd)}
+
+    if len(summary) > 0:
+        last_path = list(summary.keys())[-1]
+        summary[last_path]["prune"] = prune(last_path)
+        summary[last_path]["check"] = check(last_path)
 
     logger.info(summary_to_str(summary))
 

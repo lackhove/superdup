@@ -1,27 +1,26 @@
 #!/usr/bin/python3
 
-#  Copyright 2020 Kilian Lackhove
+#  Copyright 2021 Kilian Lackhove
 
 import argparse
 import asyncio
-import json
 import logging
-import re
 import smtplib
 import socket
 import ssl
-import subprocess
 import sys
+from time import sleep
+import subprocess
 from configparser import ConfigParser
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from functools import wraps
 from pathlib import Path
-from time import sleep
 from typing import List
 
 import attr
+
 
 logger = logging.getLogger("superdup")
 sh = logging.StreamHandler(sys.stdout)
@@ -33,10 +32,6 @@ logger.addHandler(sh)
 @attr.s
 class Config:
     duplicacy_command: str = attr.ib(default="/usr/local/bin/duplicacy", converter=str)
-    stamp_path: Path = attr.ib(
-        default=Path("/superdup/stamps.json"),
-        converter=lambda x: Path(x).expanduser().resolve(),
-    )
     log_path: Path = attr.ib(
         default=Path("/superdup/logs"),
         converter=lambda x: Path(x).expanduser().resolve(),
@@ -208,49 +203,6 @@ def prune(source_dir):
         return False
 
 
-def load_stamps():
-    try:
-        with open(config.stamp_path, "r") as f:
-            stamps = json.load(f)
-    except IOError:
-        stamps = {}
-    return stamps
-
-
-def save_stamp(source_dir):
-    stamps = load_stamps()
-    stamps[source_dir.as_posix()] = datetime.now().isoformat()
-    config.stamp_path.parent.mkdir(parents=True, exist_ok=True)
-    with open(config.stamp_path, "w") as f:
-        json.dump(stamps, f)
-    logger.debug(f"saved stamp for {source_dir.as_posix()}: {stamps}")
-
-
-@log_to_file
-def verify(source_dir):
-    logger.info(f"starting verification for {source_dir}")
-
-    try:
-        out, _ = asyncio.run(call_duplicacy_async(["list"], source_dir, dry_run=False))
-        matches = re.findall(r"Snapshot (\S+) revision (\d+)", out)
-        if len(matches) == 0:
-            logger.warning(f"No snapshots found for {source_dir}")
-            return False
-
-        snapshot_id, latest_rev = matches[-1]
-        logger.info(f"verifying snapshot {snapshot_id} revision {latest_rev}")
-        asyncio.run(
-            call_duplicacy_async(
-                ["check", "-chunks", "-r", latest_rev, "-id", snapshot_id], source_dir
-            )
-        )
-        save_stamp(source_dir)
-        return True
-    except subprocess.CalledProcessError:
-        logger.error(f"verification failed for {source_dir}")
-        return False
-
-
 @log_to_file
 def check(source_dir):
     logger.info(f"starting check for {source_dir}")
@@ -261,21 +213,6 @@ def check(source_dir):
     except subprocess.CalledProcessError:
         logger.error(f"ERROR: check failed for {source_dir}")
         return False
-
-
-def is_verification_scheduled(source_dir: Path):
-    stamps = load_stamps()
-    if source_dir.as_posix() in stamps:
-        last_verify = datetime.fromisoformat(stamps[source_dir.as_posix()])
-        time_diff = datetime.now() - last_verify
-        logger.info(f"last verification was {time_diff} ago")
-        if time_diff > timedelta(days=90):
-            return True
-    else:
-        logger.info("no previous verification found")
-        return True
-
-    return False
 
 
 def latest_logs(summary):
@@ -307,7 +244,7 @@ def email_notify(summary):
             message.attach(attachment)
 
     with smtplib.SMTP_SSL(
-        config.email_server, config.email_port, context=ssl.create_default_context(),
+        config.email_server, config.email_port, context=ssl.create_default_context()
     ) as server:
         server.login(config.email_username, config.email_password)
         server.sendmail(config.email_from, config.email_to, message.as_string())
@@ -333,7 +270,6 @@ def main():
         type=lambda x: Path(x).expanduser().resolve(),
         default=Path("/superdup/config.ini"),
     )
-    parser.add_argument("--force-verification", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
 
     args = parser.parse_args()
@@ -366,10 +302,7 @@ def main():
             continue
 
         summary[sd] = {"backup": backup(sd), "prune": prune(sd)}
-        if args.force_verification or is_verification_scheduled(sd):
-            summary[sd]["verify"] = verify(sd)
-        else:
-            summary[sd]["check"] = check(sd)
+        summary[sd]["check"] = check(sd)
 
     logger.info(summary_to_str(summary))
 

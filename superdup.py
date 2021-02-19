@@ -8,8 +8,6 @@ import logging
 import smtplib
 import socket
 import ssl
-import sys
-from time import sleep
 import subprocess
 from configparser import ConfigParser
 from datetime import datetime
@@ -20,7 +18,9 @@ from pathlib import Path
 from typing import List
 
 import attr
-
+import sys
+from requests import post, RequestException
+from time import sleep
 
 logger = logging.getLogger("superdup")
 sh = logging.StreamHandler(sys.stdout)
@@ -49,6 +49,10 @@ class Config:
     email_port: int = attr.ib(default=465, converter=int)
     email_username: str = attr.ib(default="noreply@foo.com", converter=str)
     email_password: str = attr.ib(default="verysecret", converter=str)
+
+    healthcheck_url: [None, str] = attr.ib(
+        default=None, converter=attr.converters.optional(str)
+    )
 
     duplicacy_env = attr.ib(factory=dict)
 
@@ -307,6 +311,7 @@ def main():
     logger.info(summary_to_str(summary))
 
     email_notify(summary)
+    healthcheck_notify(summary)
 
     if successful(summary):
         logger.info("SUCCESS")
@@ -325,6 +330,17 @@ def summary_to_str(summary):
     retval += "See individual logfiles for more info\n"
 
     return retval
+
+
+def healthcheck_notify(summary):
+    url = config.healthcheck_url
+    if url is None:
+        return
+
+    try:
+        post(url, data="SUCCESS" if successful(summary) else "ERROR")
+    except RequestException as e:
+        logger.error(f"Healthcheck Ping failed: {e}")
 
 
 if __name__ == "__main__":

@@ -19,7 +19,7 @@ from typing import List
 
 import attr
 import sys
-from requests import post, RequestException
+from requests import RequestException, get
 from time import sleep
 
 logger = logging.getLogger("superdup")
@@ -297,6 +297,8 @@ def main():
         logger.critical("not online, exiting")
         sys.exit(-1)
 
+    healthcheck_notify(signal_str="start")
+
     summary = {}
     for sd in config.source_path_dirs.iterdir():
         if not sd.is_dir():
@@ -316,7 +318,7 @@ def main():
     logger.info(summary_to_str(summary))
 
     email_notify(summary)
-    healthcheck_notify(summary)
+    healthcheck_notify(signal_str="" if successful(summary) else "fail")
 
     if successful(summary):
         logger.info("SUCCESS")
@@ -337,13 +339,16 @@ def summary_to_str(summary):
     return retval
 
 
-def healthcheck_notify(summary):
+def healthcheck_notify(signal_str=""):
     url = config.healthcheck_url
     if url is None:
         return
 
+    if signal_str != "":
+        url += "/" + signal_str
+
     try:
-        post(url, data="SUCCESS" if successful(summary) else "ERROR")
+        get(url, timeout=10)
     except RequestException as e:
         logger.error(f"Healthcheck Ping failed: {e}")
 

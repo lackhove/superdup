@@ -23,10 +23,24 @@ from requests import RequestException, get
 from time import sleep
 
 logger = logging.getLogger("superdup")
-sh = logging.StreamHandler(sys.stdout)
-formatter = logging.Formatter(str("{asctime} {levelname} {message}"), style="{")
-sh.setFormatter(formatter)
-logger.addHandler(sh)
+
+
+def setup_logging(verbosity):
+    global formatter
+    sh = logging.StreamHandler(sys.stdout)
+    formatter = logging.Formatter(str("{asctime} {levelname} {message}"), style="{")
+    sh.setFormatter(formatter)
+    logger.addHandler(sh)
+
+    logger.setLevel(
+        {
+            0: logging.CRITICAL,
+            1: logging.ERROR,
+            2: logging.WARNING,
+            3: logging.INFO,
+            4: logging.DEBUG,
+        }.get(verbosity)
+    )
 
 
 @attr.s
@@ -279,15 +293,7 @@ def main():
 
     args = parser.parse_args()
 
-    logger.setLevel(
-        {
-            0: logging.CRITICAL,
-            1: logging.ERROR,
-            2: logging.WARNING,
-            3: logging.INFO,
-            4: logging.DEBUG,
-        }.get(args.verbosity)
-    )
+    setup_logging(args.verbosity)
 
     global config
     config = Config.from_ini_file(args.config)

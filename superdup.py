@@ -72,6 +72,9 @@ class Config:
 
     @classmethod
     def from_ini_file(cls, path: Path):
+        if not path.is_file():
+            raise ValueError(f"Config file not found: {path}")
+
         parser = ConfigParser(interpolation=None)
         # enable case sensitive keys
         parser.optionxform = lambda option: option

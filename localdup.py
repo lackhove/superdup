@@ -92,8 +92,8 @@ def main():
             "--exclude-from=/home/kilian/.rsync-exclude",
             "--include=.*",
             "--exclude=/*",
-            "/home/lackhove/",
-            "/home/lackhove/ownCloud/backup_rechenknecht/home/",
+            "/home/kilian/",
+            "/home/kilian/ownCloud/backup_rechenknecht/home/",
         ],
         [
             "rsync",
@@ -102,7 +102,7 @@ def main():
             "--delete-excluded",
             "-au",
             "/etc/",
-            "/home/lackhove/ownCloud/backup_rechenknecht/etc/",
+            "/home/kilian/ownCloud/backup_rechenknecht/etc/",
         ],
     ):
         try:
@@ -118,7 +118,7 @@ def get_current_size():
             "du",
             "-s",
             "--block-size=1",
-            "/home/lackhove/ownCloud/backup_rechenknecht/home/",
+            "/home/kilian/ownCloud/backup_rechenknecht/home/",
         ],
         text=True,
         capture_output=True,
@@ -128,8 +128,7 @@ def get_current_size():
 
 
 def get_backup_size():
-    proc = subprocess.run(
-        [
+    command = [
             "rsync",
             "-n",
             "--stats",
@@ -139,9 +138,11 @@ def get_backup_size():
             "--exclude-from=/home/kilian/.rsync-exclude",
             "--include=.*",
             "--exclude=/*",
-            "/home/lackhove/",
-            "/home/lackhove/ownCloud/backup_rechenknecht/home/",
-        ],
+            "/home/kilian/",
+            "/home/kilian/ownCloud/backup_rechenknecht/home/",
+        ]
+    logger.debug(f"running command '{' '.join(command)}'")
+    proc = subprocess.run(command,
         text=True,
         capture_output=True,
     )

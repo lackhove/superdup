@@ -313,7 +313,7 @@ def main():
         if not sd.is_dir():
             logger.info(f"Skipping {sd}")
             continue
-        if not Path(sd, ".duplicacy").is_dir():
+        if not Path(sd, ".duplicacy").exists():
             logger.info(f"Skipping {sd}, not a duplicacy repo")
             continue
 

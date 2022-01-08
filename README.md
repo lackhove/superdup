@@ -1,4 +1,2 @@
-# superdup 
-
-... control duplicacy backups
+moved to https://gitlab.com/lackhove/superdup
 
